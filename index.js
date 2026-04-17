@@ -2,12 +2,13 @@
 /**
  * Apollo Daily Lead Gen — Search → Enrich Pipeline
  * Targets: Construction | Manufacturing | Semiconductor
- * Roles: Controller, CEO, CFO, President, Owner, AP, AR, Accounting
- * Filter: Office 365 companies
+ * Roles: Controller, CEO, CFO, President, Owner, AP, AR, Accounting, Treasury, Billing
+ * Filter: Office 365 companies | USA only | Verified emails only
  *
  * HOW IT WORKS:
  *   1. api_search  → returns Apollo IDs (no emails, obfuscated names)
  *   2. people/enrich → reveals full name + email for each ID
+ *   3. contacts (POST) → adds each new lead to the "semi" Apollo CRM list
  */
 
 const fs = require('fs');
@@ -16,13 +17,12 @@ const path = require('path');
 const APOLLO_API_KEY = process.env.APOLLO_API_KEY;
 if (!APOLLO_API_KEY) { console.error('ERROR: APOLLO_API_KEY env var required'); process.exit(1); }
 
-const TODAY = new Date().toISOString().split('T')[0];
-const LEADS_DIR = path.join(__dirname, 'leads');
+const TODAY      = new Date().toISOString().split('T')[0];
+const LEADS_DIR  = path.join(__dirname, 'leads');
 const DEDUP_FILE = path.join(__dirname, 'seen-emails.json');
+const SEMI_LABEL = '69e2415bf2f72a001194a77e';  // Apollo "semi" list ID
 
 // How many search pages per niche (100 results each)
-// 5 pages = 500 candidates per niche → ~300 emails at 60% hit rate
-// Increase to 10-20 for more volume (watch rate limits)
 const MAX_PAGES_PER_NICHE = parseInt(process.env.MAX_PAGES || '5');
 
 const NICHES = [
@@ -32,29 +32,50 @@ const NICHES = [
 ];
 
 const TARGET_TITLES = [
-  'Controller', 'Accounting Manager', 'Chief Accounting Officer', 'Comptroller',
-  'CEO', 'Chief Executive Officer',
-  'CFO', 'Chief Financial Officer',
-  'President', 'Owner', 'Co-Owner',
-  'Accounts Payable Manager', 'Accounts Payable Specialist', 'AP Manager',
-  'Accounts Receivable Manager', 'Accounts Receivable Specialist', 'AR Manager',
-  'VP Finance', 'VP of Finance', 'Director of Finance', 'Finance Director',
+  // Accounts Payable
+  'Accounts Payable Manager','Accounts Payable Specialist','Accounts Payable Supervisor',
+  'Accounts Payable Director','Accounts Payable Clerk','AP Manager','AP Director','AP Specialist',
+  // Accounts Receivable
+  'Accounts Receivable Manager','Accounts Receivable Specialist','Accounts Receivable Supervisor',
+  'Accounts Receivable Director','AR Manager','AR Director','AR Specialist',
+  // Controllers & Accounting
+  'Controller','Corporate Controller','Plant Controller','Division Controller',
+  'Comptroller','Accounting Manager','Chief Accounting Officer','Accounting Director',
+  // CFO & Finance Leadership
+  'CFO','Chief Financial Officer','VP Finance','VP of Finance',
+  'Vice President of Finance','Director of Finance','Finance Director','Finance Manager',
+  // Treasury & Billing
+  'Treasurer','Treasury Manager','Billing Manager','Billing Director',
+  'Payroll Manager','Payroll Director',
+  // C-Suite / Owners
+  'CEO','Chief Executive Officer','President','Owner','Co-Owner',
 ];
 
 const CSV_HEADER = 'Email,Full Name';
 
 // ─── Apollo helpers ───────────────────────────────────────────────────────────
 
-async function apolloPost(endpoint, body) {
-  const res = await fetch(`https://api.apollo.io/api/v1/${endpoint}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Cache-Control': 'no-cache',
-      'X-Api-Key': APOLLO_API_KEY,
-    },
-    body: JSON.stringify(body),
-  });
+async function apolloPost(endpoint, body, retry = 0) {
+  let res;
+  try {
+    res = await fetch(`https://api.apollo.io/api/v1/${endpoint}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache',
+        'X-Api-Key': APOLLO_API_KEY,
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    if (retry < 3) { await sleep(2000); return apolloPost(endpoint, body, retry + 1); }
+    throw e;
+  }
+  if (res.status === 429) {
+    console.log('\n  Rate limited — waiting 30s...');
+    await sleep(30000);
+    return apolloPost(endpoint, body, retry);
+  }
   if (!res.ok) throw new Error(`Apollo ${endpoint} HTTP ${res.status}`);
   return res.json();
 }
@@ -68,6 +89,7 @@ async function searchPage(niche, page) {
     prospected_by_current_team: ['no'],
     technology_names: ['Office 365', 'Microsoft Office 365', 'Microsoft 365'],
     person_locations: ['United States'],
+    contact_email_status: ['verified'],
   });
   return (data.people || []).map(p => p.id).filter(Boolean);
 }
@@ -80,18 +102,31 @@ async function enrichId(apolloId) {
   return data.person || null;
 }
 
+// Add person to "semi" Apollo CRM list (no credit cost — CRM operation only)
+async function addToSemiList(personId) {
+  try {
+    await apolloPost('contacts', { person_id: personId, label_ids: [SEMI_LABEL] });
+  } catch (_) {
+    // Non-fatal — don't fail the run if CRM add fails
+  }
+}
+
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ─── Dedup ────────────────────────────────────────────────────────────────────
 
 function loadSeenEmails() {
   const seen = new Set();
+
+  // 1. Load from seen-emails.json (includes semi list + all past runs)
   if (fs.existsSync(DEDUP_FILE)) {
     try {
       JSON.parse(fs.readFileSync(DEDUP_FILE, 'utf-8')).forEach(e => seen.add(e.toLowerCase()));
       return seen;
     } catch {}
   }
+
+  // 2. Fallback: scan CSV files
   if (fs.existsSync(LEADS_DIR)) {
     fs.readdirSync(LEADS_DIR).filter(f => f.endsWith('.csv')).forEach(file => {
       fs.readFileSync(path.join(LEADS_DIR, file), 'utf-8').split('\n').slice(1).forEach(line => {
@@ -100,6 +135,7 @@ function loadSeenEmails() {
       });
     });
   }
+
   return seen;
 }
 
@@ -124,8 +160,8 @@ async function main() {
   console.log('================================================');
   console.log('  Method  : Search → Enrich (2-step email reveal)');
   console.log('  Niches  : Construction | Manufacturing | Semiconductor');
-  console.log('  Roles   : Controller, CEO, CFO, President, Owner, AP, AR...');
-  console.log('  Filter  : Office 365 companies');
+  console.log('  Roles   : AP/AR, Controller, CFO, Treasurer, CEO, Owner...');
+  console.log('  Filter  : Office 365 | USA only | Verified emails');
   console.log(`  Pages   : ${MAX_PAGES_PER_NICHE} per niche (${MAX_PAGES_PER_NICHE * 100 * NICHES.length} candidates total)`);
   console.log('================================================\n');
 
@@ -133,7 +169,7 @@ async function main() {
 
   const seenEmails = loadSeenEmails();
   const startCount = seenEmails.size;
-  console.log(`Dedup: ${startCount} previously seen emails loaded\n`);
+  console.log(`Dedup: ${startCount} previously seen emails loaded (incl. semi list)\n`);
 
   const allNewLeads = [];
   const nicheSummary = {};
@@ -172,17 +208,22 @@ async function main() {
         if (!email || !email.includes('@')) continue;
 
         totalWithEmail++;
+
+        // Skip if already seen (dedup against semi list + all past runs)
         if (seenEmails.has(email)) continue;
 
         seenEmails.add(email);
         allNewLeads.push({ ...person, _niche: niche.name });
         nicheLeads++;
 
+        // Add to Apollo "semi" CRM list (async, non-blocking)
+        addToSemiList(id);
+
         if (nicheLeads % 10 === 0) {
           process.stdout.write(`  Enriched ${enriched}/${nicheIds.length} — ${nicheLeads} new emails so far\r`);
         }
 
-        await sleep(400); // ~2.5 req/sec to avoid rate limit
+        await sleep(400);
       } catch (err) {
         if (err.message.includes('429')) {
           console.log('\n  Rate limited — waiting 30s...');
@@ -221,7 +262,6 @@ async function main() {
   }
   console.log('================================================\n');
 
-  // Print 3 sample leads per niche
   if (allNewLeads.length > 0) {
     console.log('  SAMPLE LEADS (up to 3 per niche)');
     console.log('------------------------------------------------');
@@ -235,7 +275,6 @@ async function main() {
         console.log(`    Email  : ${p.email}`);
         console.log(`    Title  : ${p.title}`);
         console.log(`    Company: ${org.name}`);
-        console.log(`    Website: ${org.website_url || 'N/A'}`);
         console.log('    ---');
       }
     }
