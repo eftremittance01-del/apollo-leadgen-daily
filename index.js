@@ -227,6 +227,26 @@ async function main() {
   }
   console.log('================================================\n');
 
+  // Print 3 sample leads per niche
+  if (allNewLeads.length > 0) {
+    console.log('  SAMPLE LEADS (3 per niche)');
+    console.log('------------------------------------------------');
+    for (const niche of NICHES) {
+      const samples = allNewLeads.filter(p => p._niche === niche.name).slice(0, 3);
+      if (samples.length === 0) { console.log(`  [${niche.name}] — no new leads`); continue; }
+      console.log(`\n  [${niche.name}]`);
+      for (const p of samples) {
+        console.log(`    Name   : ${p.first_name} ${p.last_name}`);
+        console.log(`    Email  : ${p.email}`);
+        console.log(`    Title  : ${p.title}`);
+        console.log(`    Company: ${p.organization?.name}`);
+        console.log(`    Website: ${p.organization?.website_url || 'N/A'}`);
+        console.log('    ---');
+      }
+    }
+    console.log('================================================\n');
+  }
+
   if (newTotal === 0) {
     console.log('No new leads today (all results were duplicates or no results returned).');
   }
