@@ -1,0 +1,13 @@
+{
+  "name": "apollo-leadgen-daily",
+  "version": "1.0.0",
+  "description": "Daily Apollo lead gen - construction, manufacturing, semiconductor",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "run-today": "APOLLO_API_KEY=rT-0fF4eumydGNOikXvOFQ node index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
