@@ -41,12 +41,7 @@ const TARGET_TITLES = [
   'VP Finance', 'VP of Finance', 'Director of Finance', 'Finance Director',
 ];
 
-const CSV_HEADER = [
-  'Email', 'First Name', 'Last Name', 'Title', 'Seniority',
-  'Company', 'Industry', 'Company Size', 'Website',
-  'Company Phone', 'City', 'State', 'Country',
-  'LinkedIn', 'Niche', 'Date Found'
-].join(',');
+const CSV_HEADER = 'Email,Full Name';
 
 // ─── Apollo helpers ───────────────────────────────────────────────────────────
 
@@ -72,6 +67,7 @@ async function searchPage(niche, page) {
     q_keywords: niche.keyword,
     prospected_by_current_team: ['no'],
     technology_names: ['Office 365', 'Microsoft Office 365', 'Microsoft 365'],
+    person_locations: ['United States'],
   });
   return (data.people || []).map(p => p.id).filter(Boolean);
 }
@@ -115,14 +111,9 @@ function saveSeenEmails(seen) {
 
 function esc(v) { return `"${(v ?? '').toString().replace(/"/g, '""')}"` }
 
-function toCSVRow(p, niche) {
-  const org = p.organization || {};
-  return [
-    esc(p.email), esc(p.first_name), esc(p.last_name), esc(p.title), esc(p.seniority),
-    esc(org.name), esc(org.industry), esc(org.estimated_num_employees), esc(org.website_url),
-    esc(org.phone), esc(p.city), esc(p.state), esc(p.country),
-    esc(p.linkedin_url), esc(niche), esc(TODAY),
-  ].join(',');
+function toCSVRow(p) {
+  const fullName = `${p.first_name || ''} ${p.last_name || ''}`.trim();
+  return `${esc(p.email)},${esc(fullName)}`;
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -208,7 +199,7 @@ async function main() {
 
   // Write CSV
   const csvPath = path.join(LEADS_DIR, `${TODAY}.csv`);
-  const csvRows = [CSV_HEADER, ...allNewLeads.map(p => toCSVRow(p, p._niche))];
+  const csvRows = [CSV_HEADER, ...allNewLeads.map(p => toCSVRow(p))];
   fs.writeFileSync(csvPath, csvRows.join('\n'), 'utf-8');
   saveSeenEmails(seenEmails);
 
