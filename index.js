@@ -9,7 +9,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const APOLLO_API_KEY = process.env.APOLLO_API_KEY || 'rT-0fF4eumydGNOikXvOFQ';
+const APOLLO_API_KEY = process.env.APOLLO_API_KEY;
+if (!APOLLO_API_KEY) { console.error('ERROR: APOLLO_API_KEY env var required'); process.exit(1); }
 const TODAY = new Date().toISOString().split('T')[0];
 const LEADS_DIR = path.join(__dirname, 'leads');
 const DEDUP_FILE = path.join(__dirname, 'seen-emails.json');
